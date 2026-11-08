@@ -7,6 +7,7 @@ import io
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import sys
@@ -159,6 +160,19 @@ class CliTest(Base):
         # 歧义前缀报错
         code, out = self._run("cp", "claude-code", "cla-s", "-t", "codex")
         self.assertEqual(code, 2)
+
+    def test_list_copy_to_clipboard(self):
+        fixtures.build_claude(self.src_root)
+        ROOT_OVERRIDES["claude-code"] = str(self.src_root)
+        with mock.patch("session_sync.cli._copy_to_clipboard", return_value=True) as m:
+            code, out = self._run("ls", "--h", "claude-code", "-y")
+        self.assertEqual(code, 0)
+        self.assertIn("已复制 1 个会话 id", out)
+        self.assertEqual(m.call_args.args[0], "cla-s1")
+        # 剪贴板命令缺失时返回 1
+        with mock.patch("session_sync.cli._copy_to_clipboard", return_value=False):
+            code, out = self._run("ls", "--h", "claude-code", "-y")
+        self.assertEqual(code, 1)
 
     def test_show(self):
         fixtures.build_claude(self.src_root)

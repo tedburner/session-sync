@@ -27,6 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
     lst.add_argument("--cwd", "-c", help="按项目目录过滤（默认不过滤）")
     lst.add_argument("--limit", "-l", type=int, default=30)
     lst.add_argument("--json", "-j", action="store_true", help="输出 JSON")
+    lst.add_argument("--copy", "-y", action="store_true", help="把所列会话的 id 复制到系统剪贴板")
 
     sh = sub.add_parser("show", aliases=["cat"], help="渲染一个会话为 Markdown")
     sh.add_argument("harness", choices=ADAPTER_ORDER)
@@ -84,6 +85,24 @@ def _resolve_session_id(adapter, sid: str):
     return sid
 
 
+def _copy_to_clipboard(text: str) -> bool:
+    """写入系统剪贴板，按平台探测可用命令；无可用命令时返回 False。"""
+    import shutil
+    import subprocess
+
+    for cmd in (
+        ["pbcopy"],  # macOS
+        ["wl-copy"],  # Linux Wayland
+        ["xclip", "-selection", "clipboard"],  # Linux X11
+        ["xsel", "--clipboard", "--input"],
+        ["clip.exe"],  # WSL
+    ):
+        if shutil.which(cmd[0]):
+            subprocess.run(cmd, input=text.encode(), check=True)
+            return True
+    return False
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
@@ -126,20 +145,27 @@ def main(argv=None) -> int:
         if args.json:
             print(json.dumps([r.as_dict() for r in rows], ensure_ascii=False, indent=2))
             return 0
-        print(f"{'harness':<12} {'id':<10} {'updated':<19} {'msgs':>5}  title")
+        id_w = max((len(r.id) for r in rows), default=2)
+        print(f"{'harness':<12} {'id':<{id_w}} {'updated':<19} {'msgs':>5}  title")
         for r in rows:
             from .utils import ms_to_iso
 
             ts = ms_to_iso(r.updated_at)
             print(
-                f"{r.harness:<12} {r.id[:10]:<10} {(ts[:19].replace('T', ' ') if ts else '?'):<19} "
+                f"{r.harness:<12} {r.id:<{id_w}} {(ts[:19].replace('T', ' ') if ts else '?'):<19} "
                 f"{r.message_count if r.message_count is not None else '?':>5}  "
                 f"{(r.title or r.preview or '(无标题)')[:56]}"
             )
         print(
             f"\n共 {len(rows)} 个会话" + (f"（cwd={cwd}）" if cwd else "")
-            + "\n（id 为前缀缩写，copy/show 可直接使用；完整 ID 用 --json 输出）"
+            + "\n（copy/show 可用完整 id 或唯一前缀）"
         )
+        if args.copy and rows:
+            if _copy_to_clipboard("\n".join(r.id for r in rows)):
+                print(f"📋 已复制 {len(rows)} 个会话 id 到剪贴板")
+            else:
+                print("错误: 未找到剪贴板命令（pbcopy/wl-copy/xclip/xsel/clip.exe）", file=sys.stderr)
+                return 1
         return 0
 
     if args.cmd == "show":

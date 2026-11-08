@@ -49,14 +49,14 @@ session-sync          # 无参数 = 交互向导
 
 ```bash
 session-sync doctor                        # 探测 7 家安装状态与数据位置
-session-sync list [--harness H] [--cwd D] [--json]   # 表格含 id 列（前缀缩写）
+session-sync list [--harness H] [--cwd D] [--json] [--copy]   # 表格含完整会话 id；--copy 把 id 写入剪贴板
 session-sync show <harness> <sid>          # 渲染为 Markdown
 session-sync report --cwd D --out r.html   # 自包含 HTML dashboard（可视化）
 session-sync copy SRC SID --to DST [--execute] [--cwd OLD=NEW] [--on-conflict skip|new-id|overwrite]
 session-sync mcp                           # MCP server（stdio）
 ```
 
-迁移/show 需要的**会话 ID** 从 `list` 拿：表格里直接显示（默认取前 10 位前缀），`--json` 输出完整 ID。`copy` / `show` 支持唯一前缀补全——前缀不唯一时明确报错，不会猜错目标：
+迁移/show 需要的**会话 ID** 从 `list` 拿：表格直接显示完整 ID。`copy` / `show` 另支持唯一前缀补全——前缀不唯一时明确报错，不会猜错目标：
 
 ```bash
 session-sync cp claude-code a1b2c3d4 --to codex -x   # 前缀自动补全为完整 ID
