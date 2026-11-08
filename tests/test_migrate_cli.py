@@ -117,6 +117,49 @@ class CliTest(Base):
         self.assertEqual(code, 0)
         self.assertIn("Claude Code", out)
 
+    def test_subcommand_and_option_aliases(self):
+        fixtures.build_claude(self.src_root)
+        ROOT_OVERRIDES["claude-code"] = str(self.src_root)
+        # 子命令别名 ls/cat/cp/doc/rpt；--h 显式缩写 + -j/-l 短选项
+        code, out = self._run("ls", "--h", "claude-code", "-j", "-l", "10")
+        self.assertEqual(code, 0)
+        rows = json.loads(out)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["harness"], "claude-code")
+        code, out = self._run("cat", "claude-code", "cla-s1")
+        self.assertEqual(code, 0)
+        self.assertIn("please fix the login bug", out)
+        # 单字母短选项（copy 经 cp 别名 + -t/-x）
+        code, out = self._run("cp", "claude-code", "cla-s1", "-t", "codex")
+        self.assertEqual(code, 0)
+        self.assertIn("[dry-run]", out)
+        # -c 短选项（doctor）
+        code, out = self._run("doc", "-c", str(fixtures.CWD))
+        self.assertEqual(code, 0)
+        self.assertIn("Claude Code", out)
+
+    def test_list_shows_id_and_prefix_resolution(self):
+        p = fixtures.build_claude(self.src_root)
+        # 造第二个会话用于歧义场景
+        (p.with_name("cla-s2.jsonl")).write_text(p.read_text().replace("cla-s1", "cla-s2"))
+        ROOT_OVERRIDES["claude-code"] = str(self.src_root)
+        # 表格含 id 列
+        code, out = self._run("ls", "--h", "claude-code")
+        self.assertEqual(code, 0)
+        self.assertIn("cla-s1", out)
+        self.assertIn("cla-s2", out)
+        # show 用唯一前缀
+        code, out = self._run("cat", "claude-code", "cla-s1")
+        self.assertEqual(code, 0)
+        self.assertIn("please fix the login bug", out)
+        # copy 用唯一前缀（dry-run）
+        code, out = self._run("cp", "claude-code", "cla-s1", "-t", "codex")
+        self.assertEqual(code, 0)
+        self.assertIn("[dry-run]", out)
+        # 歧义前缀报错
+        code, out = self._run("cp", "claude-code", "cla-s", "-t", "codex")
+        self.assertEqual(code, 2)
+
     def test_show(self):
         fixtures.build_claude(self.src_root)
         ROOT_OVERRIDES["claude-code"] = str(self.src_root)

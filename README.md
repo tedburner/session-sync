@@ -49,12 +49,30 @@ session-sync          # 无参数 = 交互向导
 
 ```bash
 session-sync doctor                        # 探测 7 家安装状态与数据位置
-session-sync list [--harness H] [--cwd D] [--json]
+session-sync list [--harness H] [--cwd D] [--json]   # 表格含 id 列（前缀缩写）
 session-sync show <harness> <sid>          # 渲染为 Markdown
 session-sync report --cwd D --out r.html   # 自包含 HTML dashboard（可视化）
 session-sync copy SRC SID --to DST [--execute] [--cwd OLD=NEW] [--on-conflict skip|new-id|overwrite]
 session-sync mcp                           # MCP server（stdio）
 ```
+
+迁移/show 需要的**会话 ID** 从 `list` 拿：表格里直接显示（默认取前 10 位前缀），`--json` 输出完整 ID。`copy` / `show` 支持唯一前缀补全——前缀不唯一时明确报错，不会猜错目标：
+
+```bash
+session-sync cp claude-code a1b2c3d4 --to codex -x   # 前缀自动补全为完整 ID
+```
+
+支持子命令别名与常用选项缩写：
+
+- 子命令别名：`list`→`ls`、`show`→`cat`、`copy`→`cp`、`doctor`→`doc`、`report`→`rpt`
+- 选项缩写：`--harness`→`--h`/`-H`、`--cwd`→`-c`、`--limit`→`-l`、`--json`→`-j`、`--out`→`-o`、`--to`→`-t`、`--execute`→`-x`、`--max`→`-m`
+
+```bash
+# 等价于：session-sync list --harness zcode --limit 3 --json
+session-sync ls --h zcode -l 3 -j
+```
+
+无歧义的长选项前缀（如 `--har`）也始终可用。
 
 `copy` 默认 dry-run，加 `--execute` 真正写入；落点默认保持原会话 cwd，`--cwd-map OLD=NEW` 按前缀重映射项目路径。
 

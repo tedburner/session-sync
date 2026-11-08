@@ -19,36 +19,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"session-sync {__version__}")
     sub = p.add_subparsers(dest="cmd")
 
-    d = sub.add_parser("doctor", help="探测各 harness 安装与数据位置")
-    d.add_argument("--cwd", help="同时统计该项目的会话数")
+    d = sub.add_parser("doctor", aliases=["doc"], help="探测各 harness 安装与数据位置")
+    d.add_argument("--cwd", "-c", help="同时统计该项目的会话数")
 
-    lst = sub.add_parser("list", help="列出会话（默认全部 harness）")
-    lst.add_argument("--harness", choices=ADAPTER_ORDER)
-    lst.add_argument("--cwd", help="按项目目录过滤（默认不过滤）")
-    lst.add_argument("--limit", type=int, default=30)
-    lst.add_argument("--json", action="store_true", help="输出 JSON")
+    lst = sub.add_parser("list", aliases=["ls"], help="列出会话（默认全部 harness）")
+    lst.add_argument("--harness", "-H", "--h", choices=ADAPTER_ORDER)
+    lst.add_argument("--cwd", "-c", help="按项目目录过滤（默认不过滤）")
+    lst.add_argument("--limit", "-l", type=int, default=30)
+    lst.add_argument("--json", "-j", action="store_true", help="输出 JSON")
 
-    sh = sub.add_parser("show", help="渲染一个会话为 Markdown")
+    sh = sub.add_parser("show", aliases=["cat"], help="渲染一个会话为 Markdown")
     sh.add_argument("harness", choices=ADAPTER_ORDER)
     sh.add_argument("session_id")
-    sh.add_argument("--out", help="写入文件而非 stdout")
+    sh.add_argument("--out", "-o", help="写入文件而非 stdout")
     sh.add_argument("--max-tool-output", type=int, default=2000)
 
-    rp = sub.add_parser("report", help="生成自包含 HTML dashboard")
-    rp.add_argument("--harness", choices=ADAPTER_ORDER)
-    rp.add_argument("--cwd", help="按项目目录过滤")
-    rp.add_argument("--out", default="session-sync-report.html")
-    rp.add_argument("--max", type=int, default=20, help="嵌入正文的最大会话数（按最近排序）")
+    rp = sub.add_parser("report", aliases=["rpt"], help="生成自包含 HTML dashboard")
+    rp.add_argument("--harness", "-H", "--h", choices=ADAPTER_ORDER)
+    rp.add_argument("--cwd", "-c", help="按项目目录过滤")
+    rp.add_argument("--out", "-o", default="session-sync-report.html")
+    rp.add_argument("--max", "-m", type=int, default=20, help="嵌入正文的最大会话数（按最近排序）")
     rp.add_argument("--max-chars", type=int, default=400_000, help="单个会话正文字符上限")
 
-    cp = sub.add_parser("copy", help="迁移一个会话（默认 dry-run，--execute 真正写入）")
+    cp = sub.add_parser("copy", aliases=["cp"], help="迁移一个会话（默认 dry-run，--execute 真正写入）")
     cp.add_argument("src", choices=ADAPTER_ORDER)
     cp.add_argument("session_id")
-    cp.add_argument("--to", dest="dst", choices=ADAPTER_ORDER, required=True)
-    cp.add_argument("--cwd", help="覆盖目标 cwd")
+    cp.add_argument("--to", "-t", dest="dst", choices=ADAPTER_ORDER, required=True)
+    cp.add_argument("--cwd", "-c", help="覆盖目标 cwd")
     cp.add_argument("--cwd-map", metavar="OLD=NEW", action="append", default=[], help="按前缀重映射 cwd，可多次")
     cp.add_argument("--on-conflict", choices=["skip", "new-id", "overwrite"], default="skip")
-    cp.add_argument("--execute", action="store_true", help="真正执行（默认 dry-run）")
+    cp.add_argument("--execute", "-x", action="store_true", help="真正执行（默认 dry-run）")
     cp.add_argument("--manifest-out", help="把 manifest JSON 写到该目录")
     cp.add_argument("--src-root", help="覆盖源 harness 数据根目录")
     cp.add_argument("--dst-root", help="覆盖目标 harness 数据根目录")
@@ -67,6 +67,23 @@ def _apply_root_overrides(args) -> None:
             ROOT_OVERRIDES[harness] = value
 
 
+# 子命令别名 → 规范名（argparse 传入别名时 args.cmd 保留的是别名原样）
+_CMD_ALIASES = {"doc": "doctor", "ls": "list", "cat": "show", "cp": "copy", "rpt": "report"}
+
+
+def _resolve_session_id(adapter, sid: str):
+    """会话 ID 支持唯一前缀缩写：精确命中原样返回；唯一前缀补全；歧义返回 None；无匹配原样返回。"""
+    ids = [s.id for s in adapter.list_sessions(None)]
+    if sid in ids:
+        return sid
+    matches = sorted({i for i in ids if i.startswith(sid)})
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        return None
+    return sid
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
@@ -81,6 +98,7 @@ def main(argv=None) -> int:
 
         run_wizard()
         return 0
+    args.cmd = _CMD_ALIASES.get(args.cmd, args.cmd)
 
     if args.cmd == "doctor":
         from .discover import doctor, render_doctor
@@ -108,15 +126,20 @@ def main(argv=None) -> int:
         if args.json:
             print(json.dumps([r.as_dict() for r in rows], ensure_ascii=False, indent=2))
             return 0
-        print(f"{'harness':<12} {'updated':<20} {'msgs':>5}  title")
+        print(f"{'harness':<12} {'id':<10} {'updated':<19} {'msgs':>5}  title")
         for r in rows:
             from .utils import ms_to_iso
 
+            ts = ms_to_iso(r.updated_at)
             print(
-                f"{r.harness:<12} {ms_to_iso(r.updated_at) or '?':<20} {r.message_count if r.message_count is not None else '?':>5}  "
-                f"{(r.title or r.preview or '(无标题)')[:72]}"
+                f"{r.harness:<12} {r.id[:10]:<10} {(ts[:19].replace('T', ' ') if ts else '?'):<19} "
+                f"{r.message_count if r.message_count is not None else '?':>5}  "
+                f"{(r.title or r.preview or '(无标题)')[:56]}"
             )
-        print(f"\n共 {len(rows)} 个会话" + (f"（cwd={cwd}）" if cwd else ""))
+        print(
+            f"\n共 {len(rows)} 个会话" + (f"（cwd={cwd}）" if cwd else "")
+            + "\n（id 为前缀缩写，copy/show 可直接使用；完整 ID 用 --json 输出）"
+        )
         return 0
 
     if args.cmd == "show":
@@ -124,7 +147,15 @@ def main(argv=None) -> int:
         from .ir import render_markdown
 
         adapter = get_adapter(args.harness)
-        events = adapter.read_session(args.session_id)
+        sid = _resolve_session_id(adapter, args.session_id)
+        if sid is None:
+            print(f"会话 ID 前缀不唯一: {args.session_id}", file=sys.stderr)
+            return 2
+        try:
+            events = adapter.read_session(sid)
+        except Exception as exc:  # noqa: BLE001
+            print(f"错误: {exc}", file=sys.stderr)
+            return 1
         text = render_markdown(events, max_tool_output=args.max_tool_output)
         if args.out:
             with open(os.path.expanduser(args.out), "w", encoding="utf-8") as fh:
@@ -168,6 +199,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.cmd == "copy":
+        from .adapters import get_adapter
         from .migrate import copy_session, print_manifest, save_manifest
 
         _apply_root_overrides(args)
@@ -180,10 +212,14 @@ def main(argv=None) -> int:
                 return 2
             old, new = item.split("=", 1)
             cwd_map[os.path.expanduser(old)] = os.path.expanduser(new)
+        src_sid = _resolve_session_id(get_adapter(args.src), args.session_id)
+        if src_sid is None:
+            print(f"会话 ID 前缀不唯一: {args.session_id}", file=sys.stderr)
+            return 2
         try:
             manifest = copy_session(
                 args.src,
-                args.session_id,
+                src_sid,
                 args.dst,
                 src_root=args.src_root,
                 dst_root=args.dst_root,
