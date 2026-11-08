@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# session-sync launcher: picks the newest available Python (>=3.10) and runs
+# from src/ without requiring installation.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY=""
+for cand in python3.15 python3.14 python3.13 python3.12 python3.11 python3.10; do
+  if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+done
+if [ -z "$PY" ]; then
+  if command -v python3 >/dev/null 2>&1; then PY=python3; else echo "error: no python3 found" >&2; exit 1; fi
+fi
+PYTHONPATH="$DIR/src${PYTHONPATH:+:$PYTHONPATH}" exec "$PY" -m session_sync.cli "$@"
