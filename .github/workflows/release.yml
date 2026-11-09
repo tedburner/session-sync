@@ -10,8 +10,9 @@ permissions:
 
 jobs:
   build:
-    # GitHub-hosted arm64 macOS runner; Intel Macs would need a separate x64 job.
-    runs-on: macos-14
+    # GitHub-hosted arm64 macOS runner (macos-14 image is retired); Intel Macs
+    # would need a separate x64 job.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
