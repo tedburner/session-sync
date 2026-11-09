@@ -16,16 +16,65 @@
 
 纯 Python 标准库（≥3.10），零第三方依赖。dsh 解压优先用 Python 3.14+ 内置 `compression.zstd`，否则回退 `zstd` CLI。
 
-## 安装
+## 从源码开始（拿到源码后看这里）
+
+所有处理都在本地完成，不联网、不上传任何会话数据。
+
+### 1. 环境要求
+
+| 依赖 | 要求 | 说明 |
+|---|---|---|
+| Python | ≥ 3.10 | 运行 CLI / GUI / MCP，不需要第三方包 |
+| Chrome / Chromium | 可选 | GUI 用 `--app` 打开独立窗口；没有时回退默认浏览器 |
+| `zstd` CLI | 可选 | 仅 Python < 3.14 且要读写 dsh 会话时需要（3.14+ 用内置 `compression.zstd`） |
+
+macOS 自带的 `python3` 可能是 3.9，不满足要求；建议 `brew install python@3.13` 或安装 python.org 版本。先确认：
 
 ```bash
-# 方式一：免安装直接跑
-./bin/session-sync --help
+python3 --version
+```
 
-# 方式二：pip 安装（建议 venv）
+### 2. 免安装运行（推荐先这样试）
+
+```bash
+./bin/session-sync --help      # 启动脚本会自动挑选 >= 3.10 的 Python
+./bin/session-sync doctor      # 探测本机安装了哪些 harness
+./bin/session-sync             # 交互向导
+./bin/session-sync ui          # 本地 GUI
+```
+
+`bin/session-sync` 只是启动脚本，不写系统目录；迁移默认 dry-run，只有确认后才会写目标 harness。
+
+### 3. 安装 CLI（可选）
+
+```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
 session-sync --help
 ```
+
+安装后可直接用 `session-sync` 代替 `./bin/session-sync`。
+
+### 4. 本地打包 macOS .app
+
+```bash
+./scripts/build-app.sh
+open "dist/Session Sync.app"   # 或直接在 Finder 里双击
+```
+
+- 首次构建会在 `.venv-packaging/` 自动安装 PyInstaller（仅构建期依赖，运行时仍是零第三方包）。
+- 产物 `dist/Session Sync.app` 约 23MB，内嵌 Python 运行时，目标机器无需安装 Python。
+- 按构建机架构打包：Apple Silicon 上产出 arm64。
+- 重新打包直接重跑脚本即可；`dist/`、`build/` 均已被 `.gitignore` 忽略。
+
+### 5. 分发给其他人
+
+| 场景 | 做法 |
+|---|---|
+| 同架构 Mac，私下传用 | 直接拷贝 `dist/Session Sync.app`；未公证时对方首次打开需右键“打开”，或执行 `xattr -dr com.apple.quarantine "Session Sync.app"` |
+| 公开分发（不出现安全警告） | 需要 Apple Developer ID 签名 + 公证，PyInstaller 产物同样适用 |
+| Windows / Linux | 代码本身跨平台，可直接从源码运行；当前只提供 macOS 打包脚本，其他平台需在对应系统上自行构建 |
+
+> 签名/公证只影响安装体验，不改变安全模型：GUI 只监听 `127.0.0.1`，写入始终先 dry-run 再确认。
 
 ## 快速开始（向导）
 
@@ -129,6 +178,10 @@ session-sync ui -p 9000 -c /path/to/project -H claude-code
 ```
 
 Chrome 以 `--app` 模式打开独立窗口（无地址栏）；未安装 Chrome 时回退默认浏览器。页面内完成：项目扫描 → 会话列表/全文预览 → 点“导出…”选目标 harness/cwd → dry-run 计划 → 确认写入 → 结果摘要。项目目录可直接输入，也可点“浏览”调起系统文件夹选择器（macOS 用 `osascript`，Linux 用 `zenity`/`kdialog`），选完自动切换并重新扫描。仍是纯标准库实现，新增依赖为零。
+
+### 打包 macOS 应用（.app）
+
+构建、产物与分发步骤见上文「从源码开始 → 本地打包 / 分发给其他人」。运行时补充：双击启动后服务在后台运行，关闭窗口不会退出；无终端启动时日志写入 `~/Library/Logs/session-sync.log`；窗口仍按「Chrome `--app` → 默认浏览器」降级。
 
 安全边界：
 

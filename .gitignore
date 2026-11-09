@@ -6,3 +6,4 @@ dist/
 build/
 session-sync-report.html
 .DS_Store
+.venv-packaging/
