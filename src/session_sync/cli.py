@@ -55,6 +55,13 @@ def _build_parser() -> argparse.ArgumentParser:
     cp.add_argument("--dst-root", help="覆盖目标 harness 数据根目录")
     cp.add_argument("--allow-dsh-write", action="store_true", help="允许实验性 dsh 写入")
 
+    ui = sub.add_parser("ui", aliases=["gui"], help="启动本地 GUI（Chrome 应用窗口）")
+    ui.add_argument("--port", "-p", type=int, default=8765, help="监听端口（默认 8765，占用时自动改用随机端口）")
+    ui.add_argument("--no-open", "-n", action="store_true", help="只启动服务，不自动打开窗口")
+    ui.add_argument("--cwd", "-c", help="初始项目目录（默认当前目录）")
+    ui.add_argument("--harness", "-H", "--h", choices=ADAPTER_ORDER, help="初始只显示该 harness")
+    ui.add_argument("--allow-dsh-write", action="store_true", help="允许实验性 dsh 写入")
+
     sub.add_parser("mcp", help="以 MCP server 模式运行（stdio）")
     return p
 
@@ -69,7 +76,7 @@ def _apply_root_overrides(args) -> None:
 
 
 # 子命令别名 → 规范名（argparse 传入别名时 args.cmd 保留的是别名原样）
-_CMD_ALIASES = {"doc": "doctor", "ls": "list", "cat": "show", "cp": "copy", "rpt": "report"}
+_CMD_ALIASES = {"doc": "doctor", "ls": "list", "cat": "show", "cp": "copy", "rpt": "report", "gui": "ui"}
 
 
 def _resolve_session_id(adapter, sid: str):
@@ -262,6 +269,17 @@ def main(argv=None) -> int:
             path = save_manifest(manifest, args.manifest_out)
             print(f"manifest 已写入: {path}")
         return 0
+
+    if args.cmd == "ui":
+        from .websrv import run_ui
+
+        return run_ui(
+            port=args.port,
+            open_window=not args.no_open,
+            cwd=args.cwd,
+            harness=args.harness,
+            allow_dsh_write=args.allow_dsh_write,
+        )
 
     if args.cmd == "mcp":
         from .mcpsrv import main as mcp_main

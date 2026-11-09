@@ -53,6 +53,7 @@ session-sync list [--harness H] [--cwd D] [--json] [--copy]   # 表格含完整�
 session-sync show <harness> <sid>          # 渲染为 Markdown
 session-sync report --cwd D --out r.html   # 自包含 HTML dashboard（可视化）
 session-sync copy SRC SID --to DST [--execute] [--cwd OLD=NEW] [--on-conflict skip|new-id|overwrite]
+session-sync ui [--port 8765] [--no-open] [--cwd D] [--harness H]   # 本地 GUI（Chrome 应用窗口）
 session-sync mcp                           # MCP server（stdio）
 ```
 
@@ -115,6 +116,23 @@ open report.html
 
 单文件 HTML：左侧按 harness 分组的会话列表（可搜索），右侧聊天正文（thinking 折叠、工具调用展示）。ZCode 里可直接由 agent 经 Gen UI 渲染。
 
+## GUI（本地客户端）
+
+```bash
+session-sync ui                 # 起本地服务并用 Chrome 应用窗口打开
+session-sync ui --no-open      # 只起服务，打印带 token 的 URL
+session-sync ui -p 9000 -c /path/to/project -H claude-code
+```
+
+Chrome 以 `--app` 模式打开独立窗口（无地址栏）；未安装 Chrome 时回退默认浏览器。页面内完成：项目扫描 → 会话列表/全文预览 → 点“导出…”选目标 harness/cwd → dry-run 计划 → 确认写入 → 结果摘要。项目目录可直接输入，也可点“浏览”调起系统文件夹选择器（macOS 用 `osascript`，Linux 用 `zenity`/`kdialog`），选完自动切换并重新扫描。仍是纯标准库实现，新增依赖为零。
+
+安全边界：
+
+- HTTP 服务只绑 `127.0.0.1`，校验 `Host`，拒绝跨站 `Origin` / `Sec-Fetch-Site`
+- 每次启动生成随机 token，以 `HttpOnly; SameSite=Strict` cookie 传递
+- 写入必须先在页面生成 dry-run 计划，再显式确认；dsh 写入需启动时加 `--allow-dsh-write`
+- 关闭窗口不会自动退出服务；可点左侧栏底部“退出”，或终端 `Ctrl+C` 结束
+
 ## 迁移保真度
 
 | 内容 | 行为 |
@@ -135,6 +153,7 @@ open report.html
 - 写 SQLite（ZCode / WorkBuddy）前检测对应应用进程是否运行并告警
 - ZCode 库不存在时拒绝创建（防止路径手误建出假库）
 - `copy` 默认 dry-run，向导/MCP 二次确认后才执行
+- GUI 只监听 loopback，token 鉴权 + 同源校验；写入走 dry-run 确认流，dsh 写入默认关闭
 
 ## 开发
 
