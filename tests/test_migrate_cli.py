@@ -121,6 +121,7 @@ class CliTest(Base):
     def test_subcommand_and_option_aliases(self):
         fixtures.build_claude(self.src_root)
         ROOT_OVERRIDES["claude-code"] = str(self.src_root)
+        ROOT_OVERRIDES["codex"] = str(self.dst_root)
         # 子命令别名 ls/cat/cp/doc/rpt；--h 显式缩写 + -j/-l 短选项
         code, out = self._run("ls", "--h", "claude-code", "-j", "-l", "10")
         self.assertEqual(code, 0)
@@ -144,6 +145,7 @@ class CliTest(Base):
         # 造第二个会话用于歧义场景
         (p.with_name("cla-s2.jsonl")).write_text(p.read_text().replace("cla-s1", "cla-s2"))
         ROOT_OVERRIDES["claude-code"] = str(self.src_root)
+        ROOT_OVERRIDES["codex"] = str(self.dst_root)
         # 表格含 id 列
         code, out = self._run("ls", "--h", "claude-code")
         self.assertEqual(code, 0)
