@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -48,6 +49,16 @@ class WebGuiTest(unittest.TestCase):
         self.jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
         self.anon = urllib.request.build_opener()
+        self.ui_state = self.tmp / "ui-state.json"
+        self._old_ui_env = os.environ.get(websrv.UI_STATE_ENV)
+        os.environ[websrv.UI_STATE_ENV] = str(self.ui_state)
+        self.addCleanup(self._restore_ui_env)
+
+    def _restore_ui_env(self):
+        if self._old_ui_env is None:
+            os.environ.pop(websrv.UI_STATE_ENV, None)
+        else:
+            os.environ[websrv.UI_STATE_ENV] = self._old_ui_env
 
     def tearDown(self):
         ROOT_OVERRIDES.clear()
@@ -185,6 +196,51 @@ class WebGuiTest(unittest.TestCase):
             status, payload, _ = self._call("/api/pick-dir", data={})
         self.assertEqual(status, 501)
         self.assertIn("no picker", payload)
+
+    # ------------------------------------------------------------------ recents
+
+    def test_recent_records_persist_and_sort(self):
+        self._login()
+        for path in ("/tmp/proj-a", "/tmp/proj-a", "/tmp/proj-b"):
+            status, payload, _ = self._call("/api/recent", data={"path": path})
+            self.assertEqual(status, 200, payload)
+        rows = json.loads(payload)["projects"]
+        self.assertEqual([r["path"] for r in rows], ["/tmp/proj-a", "/tmp/proj-b"])
+        self.assertEqual(rows[0]["uses"], 2)
+        self.assertTrue(self.ui_state.exists())
+        self.assertEqual(self.ui_state.stat().st_mode & 0o777, 0o600)
+
+        status, payload, _ = self._call("/api/recent")
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(
+            [r["path"] for r in json.loads(payload)["projects"]],
+            ["/tmp/proj-a", "/tmp/proj-b"],
+        )
+
+    def test_recent_migration_merges_without_double_count(self):
+        self._login()
+        self._call("/api/recent", data={"path": "/tmp/proj-a"})
+        status, payload, _ = self._call(
+            "/api/recent",
+            data={"path": "/tmp/proj-a", "uses": 5, "lastUsed": 1700000000000},
+        )
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(json.loads(payload)["projects"][0]["uses"], 5)
+
+    def test_recent_expands_home(self):
+        self._login()
+        status, payload, _ = self._call("/api/recent", data={"path": "~/proj"})
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(
+            json.loads(payload)["projects"][0]["path"],
+            os.path.expanduser("~/proj"),
+        )
+
+    def test_recent_rejects_invalid_body(self):
+        self._login()
+        for body in ({"path": ""}, {"path": "/tmp/x", "uses": -1}, {"path": "/tmp/x", "lastUsed": "x"}):
+            status, _, _ = self._call("/api/recent", data=body)
+            self.assertEqual(status, 400, body)
 
 
 class FolderPickerTest(unittest.TestCase):

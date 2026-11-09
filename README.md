@@ -118,8 +118,12 @@ open report.html
 
 ## GUI（本地客户端）
 
+macOS 可直接双击仓库根目录的 `start-gui.command` 一键启动，无需安装；也可在终端运行：
+
 ```bash
-session-sync ui                 # 起本地服务并用 Chrome 应用窗口打开
+./start-gui.command            # 一键启动（macOS 可双击）
+./bin/session-sync ui          # 未安装 CLI 时直接从仓库运行
+session-sync ui                # 已安装 CLI 后
 session-sync ui --no-open      # 只起服务，打印带 token 的 URL
 session-sync ui -p 9000 -c /path/to/project -H claude-code
 ```

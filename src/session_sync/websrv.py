@@ -22,6 +22,7 @@ import webbrowser
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, ir
@@ -29,16 +30,84 @@ from .adapters import ADAPTER_ORDER, get_adapter
 from .adapters.base import AdapterError
 from .htmlreport import build_transcripts
 from .migrate import copy_session
-from .utils import ms_to_iso
+from .utils import ms_to_iso, now_ms
 
 TOKEN_COOKIE = "ss_token"
 MAX_BODY = 1 << 20
 DEFAULT_LIMIT = 400
 CONFLICT_MODES = {"skip", "new-id", "overwrite"}
+UI_STATE_ENV = "SESSION_SYNC_UI_STATE"
+RECENT_LIMIT = 20
+
+_UI_LOCK = threading.Lock()
 
 
 def _embed(obj) -> str:
     return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
+
+
+def _ui_state_path() -> Path:
+    override = os.environ.get(UI_STATE_ENV)
+    return Path(override).expanduser() if override else Path.home() / ".session-sync" / "ui.json"
+
+
+def _recent_score(item: dict, now: int) -> float:
+    try:
+        uses = float(item.get("uses") or 0)
+        last_used = int(item.get("lastUsed") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    age_days = max(0.0, (now - last_used) / 86_400_000)
+    return uses / (1 + age_days / 14)
+
+
+def _read_recent() -> list[dict]:
+    try:
+        data = json.loads(_ui_state_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = data.get("recent_projects") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict) and isinstance(row.get("path"), str)]
+
+
+def _write_recent(rows: list[dict]) -> None:
+    path = _ui_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"recent_projects": rows}, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def _list_recent() -> list[dict]:
+    with _UI_LOCK:
+        rows = _read_recent()
+    now = now_ms()
+    rows.sort(key=lambda row: _recent_score(row, now), reverse=True)
+    return rows[:RECENT_LIMIT]
+
+
+def _record_recent(path: str, uses: int | None = None, last_used: int | None = None) -> list[dict]:
+    now = now_ms()
+    with _UI_LOCK:
+        rows = _read_recent()
+        found = next((row for row in rows if row.get("path") == path), None)
+        if found is None:
+            found = {"path": path, "uses": 0, "lastUsed": 0}
+            rows.append(found)
+        if uses is None:
+            found["uses"] = int(found.get("uses") or 0) + 1
+            found["lastUsed"] = now
+        else:
+            # 迁移旧 localStorage：取 max 而不是累加，重复执行也安全
+            found["uses"] = max(int(found.get("uses") or 0), uses)
+            found["lastUsed"] = max(int(found.get("lastUsed") or 0), int(last_used or now))
+        rows.sort(key=lambda row: _recent_score(row, now), reverse=True)
+        rows = rows[:RECENT_LIMIT]
+        _write_recent(rows)
+    return rows
 
 
 class _Server(ThreadingHTTPServer):
@@ -173,6 +242,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._api_sessions(query)
             elif url.path == "/api/session":
                 self._api_session(query)
+            elif url.path == "/api/recent":
+                self._json(HTTPStatus.OK, {"projects": _list_recent()})
             else:
                 self._error(HTTPStatus.NOT_FOUND, "未知路径")
         except Exception as exc:  # noqa: BLE001 - keep the server alive
@@ -193,6 +264,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._api_copy(body, dry_run=False)
             elif url.path == "/api/pick-dir":
                 self._api_pick_dir()
+            elif url.path == "/api/recent":
+                self._api_recent(body)
             elif url.path == "/api/quit":
                 self._json(HTTPStatus.OK, {"ok": True})
                 threading.Timer(0.2, self.server.shutdown).start()
@@ -265,6 +338,22 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self._json(HTTPStatus.OK, result)
 
+    def _api_recent(self, body: dict) -> None:
+        path = body.get("path")
+        if not isinstance(path, str) or not path.strip():
+            self._error(HTTPStatus.BAD_REQUEST, "path 必须是非空字符串")
+            return
+        uses = body.get("uses")
+        last_used = body.get("lastUsed")
+        if uses is not None and (not isinstance(uses, int) or isinstance(uses, bool) or uses < 1):
+            self._error(HTTPStatus.BAD_REQUEST, "uses 必须是正整数")
+            return
+        if last_used is not None and (not isinstance(last_used, int) or isinstance(last_used, bool) or last_used < 0):
+            self._error(HTTPStatus.BAD_REQUEST, "lastUsed 必须是非负整数")
+            return
+        path = os.path.abspath(os.path.expanduser(path.strip()))
+        self._json(HTTPStatus.OK, {"projects": _record_recent(path, uses, last_used)})
+
     def _api_sessions(self, query: dict) -> None:
         requested = (query.get("harness") or [None])[0]
         if requested and requested not in ADAPTER_ORDER:
@@ -272,7 +361,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         cwd = (query.get("cwd") or [None])[0]
         if cwd:
-            cwd = os.path.expanduser(cwd)
+            cwd = os.path.abspath(os.path.expanduser(cwd))
             if not os.path.isdir(cwd):
                 self._error(HTTPStatus.BAD_REQUEST, f"目录不存在: {cwd}")
                 return
@@ -769,6 +858,16 @@ body {
 .project-row input:focus { background: var(--surface); border-color: var(--line-strong); box-shadow: 0 0 0 3px rgba(27, 29, 33, .05); }
 .project-row .primary { height: 36px; border-radius: 11px; padding: 0 14px; flex-shrink: 0; }
 .project-row .ghost { height: 36px; border-radius: 11px; padding: 0 9px; flex-shrink: 0; }
+.recent { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.recent:empty { display: none; }
+.rlabel { font-size: 9.5px; font-weight: 700; letter-spacing: .1em; color: var(--text-3); }
+.rchip {
+  max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 1px solid transparent; background: var(--surface-3); color: var(--text-2);
+  border-radius: 999px; padding: 3px 9px; font-size: 10.5px; font-weight: 500;
+}
+.rchip:hover { border-color: var(--line-strong); }
+.rchip.on { background: var(--accent); color: var(--on-accent); }
 .chk { font-size: 11px; color: var(--text-2); gap: 6px; }
 .chk input { accent-color: var(--accent); }
 .side-search { padding: 0 14px 8px; }
@@ -995,6 +1094,7 @@ dialog pre { background: var(--surface-2); border: 1px solid var(--line); border
         <button id="pick" class="ghost" title="打开系统文件夹选择器切换项目">浏览</button>
         <button id="scan" class="primary">扫描</button>
       </div>
+      <div class="recent" id="recent"></div>
       <label class="chk"><input type="checkbox" id="allProjects"> 全部项目</label>
     </div>
     <div class="side-search">
@@ -1055,6 +1155,7 @@ const state = {
   plan: null,
   planBody: null,
   scanCwd: BOOT.cwd || "",
+  recents: [],
 };
 
 function esc(s) {
@@ -1142,9 +1243,11 @@ async function loadSessions() {
         $("detail").innerHTML = '<div class="hero"><div class="hero-mark">⇄</div><h1>从哪个会话开始？</h1><p>在左侧选择一个会话，预览正文，再把它导出到另一个 harness。</p></div>';
       }
     }
+    return true;
   } catch (e) {
     $("list").innerHTML = "";
     toast(e.message, "err");
+    return false;
   }
 }
 
@@ -1152,26 +1255,101 @@ function renderCounts() {
   const box = $("counts");
   box.innerHTML = "";
   const names = state.harnesses.filter((h) => h.available).map((h) => h.name);
+  if (state.filterHarness && !names.includes(state.filterHarness)) state.filterHarness = null;
+  const total = names.reduce((n, name) => n + (state.counts[name] || 0), 0);
+  const all = document.createElement("button");
+  all.className = "chip" + (state.filterHarness ? "" : " on");
+  all.textContent = total ? "全部 " + total : "全部";
+  all.title = "显示所有 harness";
+  all.onclick = () => { state.filterHarness = null; renderCounts(); loadSessions(); };
+  box.appendChild(all);
   names.forEach((name) => {
     const count = state.counts[name];
-    if (!count) return;
+    if (!count && state.filterHarness !== name) return;
     const chip = document.createElement("button");
     chip.className = "chip" + (state.filterHarness === name ? " on" : "");
-    chip.textContent = displayName(name) + " " + count;
-    chip.title = state.filterHarness === name ? "点击取消筛选" : "只显示该 harness";
+    chip.textContent = displayName(name) + " " + (count || 0);
+    chip.title = state.filterHarness === name ? "点击切回全部" : "只显示该 harness";
     chip.onclick = () => {
       state.filterHarness = state.filterHarness === name ? null : name;
+      renderCounts();
       loadSessions();
     };
     box.appendChild(chip);
   });
-  if (state.filterHarness) {
-    const clear = document.createElement("button");
-    clear.className = "chip";
-    clear.textContent = "全部 ✕";
-    clear.onclick = () => { state.filterHarness = null; loadSessions(); };
-    box.appendChild(clear);
+}
+
+const LEGACY_RECENT_KEY = "session-sync.recent-projects.v1";
+
+async function loadRecents() {
+  try {
+    state.recents = (await api("/api/recent")).projects || [];
+  } catch (e) {
+    state.recents = [];
   }
+  await migrateLegacyRecents();
+  renderRecents();
+}
+async function migrateLegacyRecents() {
+  let legacy = null;
+  try { legacy = JSON.parse(localStorage.getItem(LEGACY_RECENT_KEY) || "null"); } catch (e) { legacy = null; }
+  if (!Array.isArray(legacy)) return;
+  for (const item of legacy) {
+    if (!item || typeof item.path !== "string") continue;
+    try {
+      const data = await api("/api/recent", { method: "POST", body: JSON.stringify({
+        path: item.path,
+        uses: item.uses || 1,
+        lastUsed: item.lastUsed || Date.now(),
+      }) });
+      state.recents = data.projects || state.recents;
+    } catch (e) {
+      return; // 迁移失败保留旧数据，下次启动重试
+    }
+  }
+  try { localStorage.removeItem(LEGACY_RECENT_KEY); } catch (e) { /* ignore */ }
+}
+function topRecents() {
+  return (state.recents || []).slice(0, 5);
+}
+function projectName(path) {
+  const clean = String(path || "").replace(/[/]+$/, "");
+  return clean.split("/").pop() || clean || String(path || "");
+}
+async function recordProject(path) {
+  if (!path) return;
+  try {
+    const data = await api("/api/recent", { method: "POST", body: JSON.stringify({ path: path }) });
+    state.recents = data.projects || state.recents;
+    renderRecents();
+  } catch (e) { /* 记录失败不影响扫描 */ }
+}
+function renderRecents() {
+  const box = $("recent");
+  const top = topRecents();
+  box.innerHTML = "";
+  if (!top.length) return;
+  const label = document.createElement("span");
+  label.className = "rlabel";
+  label.textContent = "最近";
+  box.appendChild(label);
+  const current = $("cwd").value.trim().replace(/[/]+$/, "");
+  top.forEach((item) => {
+    const chip = document.createElement("button");
+    chip.className = "rchip" + (current === item.path ? " on" : "");
+    chip.textContent = projectName(item.path);
+    chip.title = item.path;
+    chip.onclick = () => useRecentProject(item.path);
+    box.appendChild(chip);
+  });
+}
+async function useRecentProject(path) {
+  $("cwd").value = path;
+  $("allProjects").checked = false;
+  if (await loadSessions()) recordProject(state.scanCwd);
+}
+async function scanAndRecord() {
+  if (await loadSessions()) recordProject(state.scanCwd);
 }
 
 function renderList() {
@@ -1417,7 +1595,7 @@ function resultHtml(m) {
     </div>`;
 }
 
-$("scan").onclick = loadSessions;
+$("scan").onclick = scanAndRecord;
 $("pick").onclick = async () => {
   const btn = $("pick");
   btn.disabled = true;
@@ -1427,7 +1605,7 @@ $("pick").onclick = async () => {
     if (data.cancelled) return;
     $("cwd").value = data.path;
     $("allProjects").checked = false;
-    await loadSessions();
+    if (await loadSessions()) recordProject(state.scanCwd);
   } catch (e) {
     toast(e.message, "err");
   } finally {
@@ -1435,7 +1613,7 @@ $("pick").onclick = async () => {
     btn.textContent = "浏览";
   }
 };
-$("cwd").addEventListener("keydown", (e) => { if (e.key === "Enter") loadSessions(); });
+$("cwd").addEventListener("keydown", (e) => { if (e.key === "Enter") scanAndRecord(); });
 $("allProjects").addEventListener("change", loadSessions);
 $("q").addEventListener("input", renderList);
 $("quit").onclick = async () => {
@@ -1446,6 +1624,7 @@ $("quit").onclick = async () => {
 
 $("ver").textContent = "v" + BOOT.version;
 $("cwd").value = BOOT.cwd || "";
+loadRecents();
 loadDoctor();
 loadSessions();
 </script>
