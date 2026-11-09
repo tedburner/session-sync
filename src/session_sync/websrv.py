@@ -500,6 +500,54 @@ def _open_app_window(url: str) -> str:
     return "browser"
 
 
+def _prevent_app_nap() -> None:
+    """Stop macOS from throttling this windowless server app (App Nap).
+
+    A windowed/no-window process that only runs an HTTP server is a prime
+    App Nap target: once napped, API calls and subprocess spawns (folder
+    picker) stall or hang. Declaring user-initiated activity disables it.
+    Best-effort: silently skip on any failure.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.objc_msgSend.restype = ctypes.c_void_p
+
+        def send(obj, sel, *args, argtypes=None):
+            if args:
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p, *argtypes]
+            else:
+                objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            return objc.objc_msgSend(obj, objc.sel_registerName(sel.encode()), *args)
+
+        # NSActivityUserInitiatedAllowingIdleSystemSleep: keeps this process
+        # out of App Nap while still allowing the machine to idle-sleep.
+        options = 0x00FFFFFF & ~(1 << 20)
+
+        foundation = ctypes.cdll.LoadLibrary(ctypes.util.find_library("Foundation"))
+        nsstring = send(objc.objc_getClass(b"NSString"), "stringWithUTF8String:",
+                        b"session-sync local UI server",
+                        argtypes=[ctypes.c_char_p])
+        info = send(objc.objc_getClass(b"NSProcessInfo"), "processInfo")
+        if not (info and nsstring and foundation):
+            return
+        activity = send(info, "beginActivityWithOptions:reason:",
+                        ctypes.c_uint64(options), ctypes.c_void_p(nsstring),
+                        argtypes=[ctypes.c_uint64, ctypes.c_void_p])
+        if activity:
+            globals()["_NS_ACTIVITY"] = ctypes.c_void_p(activity)  # keep alive
+    except Exception:
+        pass  # nap prevention is an optimization, never fatal
+
+
 def pick_directory() -> dict:
     """Open the OS folder picker; return {"path": ...} or {"cancelled": True}."""
     if sys.platform == "darwin" and shutil.which("osascript"):
@@ -510,17 +558,28 @@ def pick_directory() -> dict:
         cmd = ["kdialog", "--getexistingdirectory", os.path.expanduser("~"), "--title", "选择项目目录"]
     else:
         raise RuntimeError("当前系统没有可用的文件夹选择器，请直接输入路径")
+    env = dict(os.environ)
+    if sys.platform == "darwin" and not shutil.which("osascript", path=env.get("PATH")):
+        env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"  # Finder 启动的 app PATH 可能被裁剪
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600,
+            stdin=subprocess.DEVNULL, env=env,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"无法打开文件夹选择器: {exc}") from exc
     out = (proc.stdout or "").strip()
     err = ((proc.stderr or "") + (proc.stdout or "")).strip()
     if proc.returncode != 0:
-        if "-128" in err or "cancel" in err.lower():
+        if "-128" in err or "cancel" in err.lower() or "已取消" in err:
             return {"cancelled": True}
         if cmd[0] in {"zenity", "kdialog"} and proc.returncode == 1:
             return {"cancelled": True}
+        if "-1743" in err or "not authorized" in err.lower():
+            raise RuntimeError(
+                "系统拒绝了文件夹选择器权限（TCC）。请在 系统设置 → 隐私与安全性 → "
+                "文件与文件夹/自动化 中允许本应用，然后重试。"
+            )
         raise RuntimeError(f"文件夹选择器失败: {err or proc.returncode}")
     if not out:
         return {"cancelled": True}
@@ -575,6 +634,7 @@ def run_ui(
     actual_port = server.server_address[1]
     if port and actual_port != port:
         print(f"⚠ 端口 {port} 被占用，已改用 {actual_port}", file=sys.stderr, flush=True)
+    _prevent_app_nap()
     url = f"{server.origin}/?token={server.token}"
     print(f"🧩 session-sync GUI: {url}", flush=True)
     if open_window:
@@ -868,8 +928,15 @@ body {
 }
 .rchip:hover { border-color: var(--line-strong); }
 .rchip.on { background: var(--accent); color: var(--on-accent); }
-.chk { font-size: 11px; color: var(--text-2); gap: 6px; }
-.chk input { accent-color: var(--accent); }
+.chk { font-size: 11px; color: var(--text-2); gap: 6px; cursor: pointer; user-select: none; }
+/* 全局 input 规则会给 checkbox 套上带边框/阴影的盒子，这里重置为原生外观 */
+.chk input {
+  accent-color: var(--accent); width: 13px; height: 13px; min-width: 13px;
+  margin: 0; padding: 0; border: none; background: transparent;
+  border-radius: 0; box-shadow: none;
+}
+.chk input:focus { box-shadow: none; }
+.project-row .chk { flex-shrink: 0; white-space: nowrap; margin-left: 2px; }
 .side-search { padding: 0 14px 8px; }
 .search {
   width: 100%; height: 38px; margin: 0; border-radius: 12px;
@@ -1093,9 +1160,9 @@ dialog pre { background: var(--surface-2); border: 1px solid var(--line); border
         <input id="cwd" placeholder="项目目录（默认当前项目）" spellcheck="false">
         <button id="pick" class="ghost" title="打开系统文件夹选择器切换项目">浏览</button>
         <button id="scan" class="primary">扫描</button>
+        <label class="chk" title="扫描所有项目目录（忽略上方路径）"><input type="checkbox" id="allProjects"> 全部项目</label>
       </div>
       <div class="recent" id="recent"></div>
-      <label class="chk"><input type="checkbox" id="allProjects"> 全部项目</label>
     </div>
     <div class="side-search">
       <input class="search" id="q" placeholder="搜索标题 / ID / 路径…">

@@ -22,6 +22,43 @@ from .base import Adapter, AdapterError, SessionSummary
 _KEY_BYTE_LIMIT = 255
 _KEY_TRUNCATE_BYTES = 180
 
+# WorkBuddy injects wrapper blocks into user messages: <system-reminder>
+# (user context / mode switches / attachments) and <automation_system_reminder>
+# (scheduled automation prompts); the real question is wrapped in <user_query>.
+# Strip wrappers first, then extract <user_query> — prose inside wrappers may
+# itself mention "<user_query>", which would fool a naive search.
+_INJECTED_BLOCK_RES = (
+    re.compile(r"<system-reminder\b[^>]*>.*?(?:</system-reminder>|\Z)", re.S),
+    re.compile(r"<automation_system_reminder\b[^>]*>.*?(?:</automation_system_reminder>|\Z)", re.S),
+)
+_USER_QUERY_RE = re.compile(r"<user_query>(.*?)</user_query>", re.S)
+
+
+def _human_user_text(text: str) -> str:
+    """Return the human-typed part of a user message, skipping injections."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    for rx in _INJECTED_BLOCK_RES:
+        text = rx.sub("", text)
+    m = _USER_QUERY_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+def _first_human_text_from_events(events, limit: int = 60) -> str:
+    for e in events:
+        if e.get("type") != "message" or e.get("role") != "user":
+            continue
+        for b in e.get("blocks") or []:
+            if b.get("type") != "text":
+                continue
+            text = _human_user_text(b.get("text", ""))
+            if text:
+                return truncate(text, limit)
+    return ""
+
 
 def _truncate_utf8(text: str, limit: int) -> str:
     out: list[str] = []
@@ -171,7 +208,8 @@ class WorkBuddyAdapter(Adapter):
                             text = extract_text_content(
                                 obj.get("content") or [{"type": "input_text", "text": ""}]
                             )
-                            if text.strip():
+                            text = _human_user_text(text)
+                            if text:
                                 first_text = truncate(text, 160)
         except OSError:
             pass
@@ -247,8 +285,16 @@ class WorkBuddyAdapter(Adapter):
                      "ext": {}}
                 )
             elif t == "ai-title":
-                meta["title"] = line.get("title") or meta["title"]
+                # real WorkBuddy writes {"type":"ai-title","aiTitle":...}; older
+                # fixtures use {"title":...}. Accept both.
+                meta["title"] = line.get("aiTitle") or line.get("title") or meta["title"]
             elif t == "session-meta":
+                st = (line.get("meta") or {}).get("codebuddy.ai/sessionTitle")
+                if not meta["title"] and isinstance(st, list):
+                    for item in st:
+                        if isinstance(item, dict) and item.get("aiTitle"):
+                            meta["title"] = item["aiTitle"]
+                            break
                 continue
             else:
                 events.append(
@@ -257,7 +303,7 @@ class WorkBuddyAdapter(Adapter):
                      "data": {}, "ext": {"raw_line": line}}
                 )
         if not meta["title"]:
-            meta["title"] = ir.first_user_text(events, 60) or None
+            meta["title"] = _first_human_text_from_events(events, 60) or None
         return events
 
     def _session_file(self, sid: str) -> Path | None:

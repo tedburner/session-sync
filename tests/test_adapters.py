@@ -351,5 +351,77 @@ class CodexTitleTest(unittest.TestCase):
         self.assertEqual(adapter.list_sessions()[0].title, "继续审核")
 
 
+class WorkBuddyTitleTest(unittest.TestCase):
+    """WorkBuddy injects <system-reminder> blocks into user messages; titles
+    must come from aiTitle / <user_query>, never from the injected blob."""
+
+    def setUp(self):
+        self._tmpobj = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmpobj.name)
+        self.addCleanup(self._tmpobj.cleanup)
+        self.pdir = self.root / "projects" / "proj"
+        self.pdir.mkdir(parents=True)
+
+    def _write(self, sid, lines):
+        fixtures.write_jsonl(self.pdir / f"{sid}.jsonl", lines)
+        return get_adapter("workbuddy", root=self.root)
+
+    def test_ai_title_real_field(self):
+        sid = "wb-t1"
+        adapter = self._write(sid, [
+            {"type": "session-meta", "id": "m1", "sessionId": sid, "timestamp": 1700000000000,
+             "meta": {}},
+            {"id": "w1", "timestamp": 1700000000100, "type": "message", "role": "user",
+             "content": [{"type": "input_text",
+                          "text": "<system-reminder data-role=\"user-context\">\n"
+                                  "<user_info>\nOS Version: darwin\n</user_info>\n"
+                                  "</system-reminder>\n"
+                                  "<user_query>对本地代码进行审核</user_query>"}],
+             "sessionId": sid, "cwd": fixtures.CWD},
+            {"type": "ai-title", "aiTitle": "审核本地代码", "sessionId": sid},
+        ])
+        self.assertEqual(adapter.read_session(sid)[0]["title"], "审核本地代码")
+        # no workbuddy.db in this sandbox: list falls back to the cleaned preview
+        summary = adapter.list_sessions()[0]
+        self.assertEqual(summary.title, "对本地代码进行审核")
+        self.assertEqual(summary.preview, "对本地代码进行审核")
+
+    def test_fallback_skips_system_reminder(self):
+        sid = "wb-t2"
+        adapter = self._write(sid, [
+            {"id": "w1", "timestamp": 1700000000100, "type": "message", "role": "user",
+             "content": [{"type": "input_text",
+                          "text": "<system-reminder data-role=\"user-context\">\n"
+                                  "<user_info>\nOS Version: darwin\n</user_info>\n"
+                                  "</system-reminder>"}],
+             "sessionId": sid, "cwd": fixtures.CWD},
+            {"id": "w2", "timestamp": 1700000000200, "type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "<user_query>检查评测指标未完成任务</user_query>"}],
+             "sessionId": sid, "cwd": fixtures.CWD},
+        ])
+        self.assertEqual(adapter.read_session(sid)[0]["title"], "检查评测指标未完成任务")
+        self.assertEqual(adapter.list_sessions()[0].title, "检查评测指标未完成任务")
+
+    def test_session_meta_embedded_title(self):
+        sid = "wb-t3"
+        adapter = self._write(sid, [
+            {"type": "session-meta", "id": "m1", "sessionId": sid, "timestamp": 1700000000000,
+             "meta": {"codebuddy.ai/sessionTitle": [{"type": "ai-title", "aiTitle": "路径大小写问题排查"}]}},
+            {"id": "w1", "timestamp": 1700000000100, "type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "<user_query>hello</user_query>"}],
+             "sessionId": sid, "cwd": fixtures.CWD},
+        ])
+        self.assertEqual(adapter.read_session(sid)[0]["title"], "路径大小写问题排查")
+
+    def test_plain_message_still_works(self):
+        sid = "wb-t4"
+        adapter = self._write(sid, [
+            {"id": "w1", "timestamp": 1700000000100, "type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "please fix the login bug"}],
+             "sessionId": sid, "cwd": fixtures.CWD},
+        ])
+        self.assertEqual(adapter.read_session(sid)[0]["title"], "please fix the login bug")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,6 +66,9 @@ app = BUNDLE(
         "CFBundleVersion": __version__,
         "NSHighResolutionCapable": True,
         "NSPrincipalClass": "NSApplication",
+        # 无窗口的服务型 app 会被 macOS App Nap 休眠，导致 UI 卡顿、
+        # osascript 文件夹选择器迟迟不弹出；显式关闭 App Nap。
+        "NSAppSleepDisabled": True,
         "LSMinimumSystemVersion": "12.0",
         "LSApplicationCategoryType": "public.app-category.developer-tools",
     },
