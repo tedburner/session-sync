@@ -74,6 +74,8 @@ open "dist/Session Sync.app"   # 或直接在 Finder 里双击
 | 公开分发（不出现安全警告） | 需要 Apple Developer ID 签名 + 公证，PyInstaller 产物同样适用 |
 | Windows / Linux | 代码本身跨平台，可直接从源码运行；当前只提供 macOS 打包脚本，其他平台需在对应系统上自行构建 |
 
+推送 `v*` tag 会触发 GitHub Actions（`.github/workflows/release.yml`）：跑单测 → 构建 `.app` → 生成 zip/SHA256 → 自动创建 Release。也可在 Actions 页手动触发，仅上传构建产物（不发布 Release）。
+
 > 签名/公证只影响安装体验，不改变安全模型：GUI 只监听 `127.0.0.1`，写入始终先 dry-run 再确认。
 
 ## 快速开始（向导）

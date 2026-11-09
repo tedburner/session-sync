@@ -16,9 +16,16 @@ find_python() {
   return 1
 }
 
-PY="$(find_python || true)"
+PY="${PYTHON:-}"
 if [ -z "$PY" ]; then
-  echo "error: 需要 Python >= 3.10 来构建（例如 brew install python@3.13）" >&2
+  PY="$(find_python || true)"
+fi
+if [ -z "$PY" ]; then
+  echo "error: 需要 Python >= 3.10 来构建（例如 brew install python@3.13；也可用 PYTHON=/path/to/python3 指定）" >&2
+  exit 1
+fi
+if ! "$PY" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "error: $PY 不是 Python >= 3.10" >&2
   exit 1
 fi
 
