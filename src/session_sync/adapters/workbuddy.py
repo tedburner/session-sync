@@ -19,8 +19,43 @@ from ..utils import (
 from .base import Adapter, AdapterError, SessionSummary
 
 
+_KEY_BYTE_LIMIT = 255
+_KEY_TRUNCATE_BYTES = 180
+
+
+def _truncate_utf8(text: str, limit: int) -> str:
+    out: list[str] = []
+    size = 0
+    for ch in text:
+        n = len(ch.encode("utf-8"))
+        if size + n > limit:
+            break
+        size += n
+        out.append(ch)
+    return "".join(out)
+
+
+def _djb2_base36(text: str) -> str:
+    h = 5381
+    for ch in text:
+        h = ((h * 33) ^ ord(ch)) & 0xFFFFFFFF
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out: list[str] = []
+    while h:
+        h, rem = divmod(h, 36)
+        out.append(digits[rem])
+    return "".join(reversed(out)) or "0"
+
+
 def _encode_cwd(cwd: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+    """Mirror WorkBuddy's normalizeWorkspacePathBase/compressWorkspacePathName."""
+    key = re.sub(r"[/\\:]", "-", cwd)
+    key = re.sub(r"^-+", "", key)
+    key = re.sub(r"-+$", "", key)
+    key = re.sub(r"-+", "-", key)
+    if len(key.encode("utf-8")) <= _KEY_BYTE_LIMIT:
+        return key
+    return f"{_truncate_utf8(key, _KEY_TRUNCATE_BYTES)}-{_djb2_base36(key)}"
 
 
 class WorkBuddyAdapter(Adapter):

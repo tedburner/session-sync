@@ -183,7 +183,7 @@ def build_pi(root, sid="pi-s1"):
 
 
 def build_workbuddy(root):
-    pdir = root / "projects" / "-tmp-proj-a"
+    pdir = root / "projects" / "tmp-proj-a"
     pdir.mkdir(parents=True)
     sid = "b2507d2d-1111-4222-8333-944455556666"
     lines = [

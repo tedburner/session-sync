@@ -20,6 +20,7 @@ import fixtures  # noqa: E402
 
 from session_sync.adapters import get_adapter  # noqa: E402
 from session_sync.adapters.dsh import DshAdapter  # noqa: E402
+from session_sync.adapters.workbuddy import _encode_cwd  # noqa: E402
 
 
 def texts(events, role=None):
@@ -220,6 +221,32 @@ class RoundtripTest(unittest.TestCase):
         fixtures.build_workbuddy(self.src_root)
         self._roundtrip("workbuddy", "b2507d2d-1111-4222-8333-944455556666", "claude-code")
 
+    def test_workbuddy_writes_to_workbuddy_project_key(self):
+        fixtures.build_workbuddy(self.src_root)
+        adapter = get_adapter("workbuddy", root=self.src_root)
+        events = adapter.read_session("b2507d2d-1111-4222-8333-944455556666")
+        result = adapter.write_session(events, cwd="/tmp/proj-a", on_conflict="new-id")
+        expected = self.src_root / "projects" / "tmp-proj-a" / f"{result['target_id']}.jsonl"
+        self.assertEqual(Path(result["path"]), expected)
+        self.assertTrue(expected.exists())
+
+    def test_workbuddy_path_key_matches_native_layout(self):
+        self.assertEqual(
+            _encode_cwd("/Users/kiturone/Documents/Project/person/session-sync"),
+            "Users-kiturone-Documents-Project-person-session-sync",
+        )
+        self.assertEqual(_encode_cwd("/tmp//proj-a/"), "tmp-proj-a")
+        self.assertEqual(_encode_cwd("C:\\work\\proj"), "C-work-proj")
+        self.assertEqual(
+            _encode_cwd("/Users/kiturone/WorkBuddy/闲聊"),
+            "Users-kiturone-WorkBuddy-闲聊",
+        )
+
+    def test_workbuddy_path_key_truncates_long_paths(self):
+        key = _encode_cwd("/" + "a" * 300)
+        self.assertLessEqual(len(key.encode("utf-8")), 255)
+        self.assertRegex(key, r"^a{180}-[0-9a-z]+$")
+
     # ------------------------------------------------------------ dsh
 
     def test_dsh_read(self):
@@ -252,6 +279,76 @@ class RoundtripTest(unittest.TestCase):
         idx = json.loads((self.src_root / "storages" / "workspace.json").read_text())
         sids = [s for ws in idx["tables"]["workspaces"].values() for s in ws["sessionIds"]]
         self.assertIn(result["target_id"], sids)
+
+
+class CodexTitleTest(unittest.TestCase):
+    """Codex injects AGENTS.md/env/review text as user messages; titles must skip them."""
+
+    def setUp(self):
+        self._tmpobj = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmpobj.name)
+        self.addCleanup(self._tmpobj.cleanup)
+        self.day = self.root / "sessions" / "2026" / "11" / "08"
+        self.day.mkdir(parents=True)
+
+    def _write(self, sid, user_texts):
+        lines = [
+            {"timestamp": "2026-11-08T10:00:00Z", "type": "session_meta",
+             "payload": {"session_id": sid, "cwd": fixtures.CWD}}
+        ]
+        for text in user_texts:
+            lines.append({
+                "timestamp": "2026-11-08T10:00:01Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message", "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            })
+        fixtures.write_jsonl(self.day / f"rollout-2026-11-08T10-00-00-{sid}.jsonl", lines)
+        return get_adapter("codex", root=self.root)
+
+    def test_unwraps_files_mentioned_request(self):
+        adapter = self._write("cod-t1", [
+            "# AGENTS.md instructions for /tmp/proj-a\n\n<INSTRUCTIONS>rules</INSTRUCTIONS>",
+            "<environment_context>\n<cwd>/tmp/proj-a</cwd>\n</environment_context>",
+            "# Files mentioned by the user:\n\n## request.md:\nbody\n\n## My request:\n修复登录 bug",
+        ])
+        summary = adapter.list_sessions()[0]
+        self.assertEqual(summary.title, "修复登录 bug")
+        self.assertEqual(summary.preview, "修复登录 bug")
+        self.assertEqual(adapter.read_session("cod-t1")[0]["title"], "修复登录 bug")
+
+    def test_internal_review_session_keeps_no_title(self):
+        adapter = self._write("cod-t2", [
+            "# AGENTS.md instructions for /tmp/proj-a\n\n<INSTRUCTIONS>rules</INSTRUCTIONS>",
+            "The following is the Codex agent history added since your last approval assessment. ...",
+            "[42] tool send_message call: {\"target\":\"x\"}",
+            "## Code review guidelines:\n# Review Guidelines",
+        ])
+        summary = adapter.list_sessions()[0]
+        self.assertIsNone(summary.title)
+        self.assertEqual(summary.preview, "")
+        self.assertIsNone(adapter.read_session("cod-t2")[0]["title"])
+
+    def test_prefers_codex_index_thread_name(self):
+        self._write("cod-t4", ["原始提问内容"])
+        fixtures.write_jsonl(self.root / "session_index.jsonl", [
+            {"id": "cod-t4", "thread_name": "修复登录问题", "updated_at": "2026-11-08T10:00:00Z"},
+        ])
+        adapter = get_adapter("codex", root=self.root)
+        summary = adapter.list_sessions()[0]
+        self.assertEqual(summary.title, "修复登录问题")
+        self.assertEqual(summary.preview, "原始提问内容")
+        self.assertEqual(adapter.read_session("cod-t4")[0]["title"], "修复登录问题")
+
+    def test_uses_first_human_message(self):
+        adapter = self._write("cod-t3", [
+            "<turn_aborted> The user interrupted the previous turn",
+            "<skill>\n<name>git-commit</name>\n</skill>",
+            "继续审核",
+        ])
+        self.assertEqual(adapter.list_sessions()[0].title, "继续审核")
 
 
 if __name__ == "__main__":

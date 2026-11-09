@@ -39,6 +39,49 @@ def _lines_of(path: Path) -> list[dict]:
     return read_jsonl(path)
 
 
+_FILES_WRAPPER = "# Files mentioned by the user:"
+_REQUEST_MARKER = "## My request:"
+
+_INJECTED_PREFIXES = (
+    "# AGENTS.md instructions for ",
+    "## Code review guidelines:",
+    "The following is the Codex agent history",
+    "<environment_context>",
+    "<turn_aborted>",
+    "<external_codex_apps_",
+    "<skill>",
+    "<skills_instructions>",
+    "<send_user_message_question_reply>",
+    "<user_instructions>",
+)
+
+_TRANSCRIPT_RE = re.compile(r"^\[\d+\]\s+(?:assistant|user|tool)\b")
+
+
+def _human_user_text(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if text.startswith(_FILES_WRAPPER):
+        idx = text.find(_REQUEST_MARKER)
+        return text[idx + len(_REQUEST_MARKER):].strip() if idx >= 0 else ""
+    if text.startswith(_INJECTED_PREFIXES) or _TRANSCRIPT_RE.match(text):
+        return ""
+    return text
+
+
+def _first_human_text(events, limit: int = 60) -> str:
+    for e in events:
+        if e.get("type") != "message" or e.get("role") != "user":
+            continue
+        for b in e.get("blocks") or []:
+            if b.get("type") == "text":
+                text = _human_user_text(b.get("text", ""))
+                if text:
+                    return truncate(text, limit)
+    return ""
+
+
 def _output_text(value) -> str:
     if value is None:
         return ""
@@ -92,6 +135,24 @@ class CodexAdapter(Adapter):
         out.sort(key=lambda s: s.updated_at or 0, reverse=True)
         return out
 
+    def _index_titles(self) -> dict[str, str]:
+        cached = getattr(self, "_title_index", None)
+        if cached is not None:
+            return cached
+        titles: dict[str, str] = {}
+        index_path = self.root / "session_index.jsonl"
+        if index_path.exists():
+            try:
+                for row in read_jsonl(index_path):
+                    sid = row.get("id")
+                    name = (row.get("thread_name") or "").strip()
+                    if sid and name:
+                        titles[sid] = name
+            except OSError:
+                pass
+        self._title_index = titles
+        return titles
+
     def _summarize_file(self, path: Path, sid: str) -> SessionSummary | None:
         try:
             lines = _lines_of(path)
@@ -120,13 +181,13 @@ class CodexAdapter(Adapter):
                 if payload.get("type") == "message":
                     count += 1
                     if payload.get("role") == "user" and not first_text:
-                        text = extract_text_content(payload.get("content"))
-                        if text.strip():
+                        text = _human_user_text(extract_text_content(payload.get("content")))
+                        if text:
                             first_text = truncate(text, 160)
         return SessionSummary(
             harness=self.name,
             id=sid,
-            title=first_text or None,
+            title=self._index_titles().get(sid) or first_text or None,
             cwd=cwd,
             created_at=created_at,
             updated_at=updated_at,
@@ -271,7 +332,7 @@ class CodexAdapter(Adapter):
         meta = events[0]
         if created_at:
             meta["created_at"] = created_at
-        meta["title"] = ir.first_user_text(events, 60) or None
+        meta["title"] = self._index_titles().get(sid) or _first_human_text(events, 60) or None
         if skipped_event_msg:
             events[0]["ext"]["skipped_event_msg"] = skipped_event_msg
         return events
@@ -319,7 +380,7 @@ class CodexAdapter(Adapter):
         if not skipped and not dry_run:
             lines = self._build_lines(events, sid, target_cwd, warnings)
             write_jsonl(path, lines)
-            self._update_index(meta.get("title") or ir.first_user_text(events, 60), sid, warnings, dry_run=False)
+            self._update_index(meta.get("title") or _first_human_text(events, 60), sid, warnings, dry_run=False)
         result = {
             "harness": self.name,
             "target_id": sid,
