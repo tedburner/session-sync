@@ -73,6 +73,7 @@ def copy_session(
         },
         "stats": stats,
         "warnings": ir_warnings + target_warnings + result.get("warnings", []),
+        "notes": dst_adapter.import_notes(events),
     }
     if meta.get("ext", {}).get("skipped_event_msg"):
         manifest["warnings"].append(
@@ -108,6 +109,8 @@ def print_manifest(manifest: dict) -> str:
             lines.append(f"    - {w}")
         if len(manifest["warnings"]) > 12:
             lines.append(f"    … 共 {len(manifest['warnings'])} 条")
+    for note in manifest.get("notes") or []:
+        lines.append(f"  ℹ {note}")
     return "\n".join(lines)
 
 

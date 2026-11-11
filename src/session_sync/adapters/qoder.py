@@ -139,6 +139,14 @@ class QoderAdapter(ClaudeLikeAdapter):
             return ["Qoder: 源会话没有可识别的人类提问，导入后可能显示为“Empty conversation”"]
         return []
 
+    # The desktop sidebar reads the client's own SQLite (chat_sessions), not these
+    # jsonl files, so a written session is only visible to the CLI/daemon layer.
+    def import_notes(self, events: list[dict]) -> list[str]:
+        return [
+            f"{self.display_name}: 桌面端会话列表来自客户端本地数据库，本次写入仅对 CLI/daemon 可见；"
+            "要在桌面端看到会话，请使用客户端的「设置 → 数据导入」"
+        ]
+
 
 class QoderCNAdapter(QoderAdapter):
     name = "qoder-cn"

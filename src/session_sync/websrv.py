@@ -804,6 +804,9 @@ aside {
 .warnbox summary { cursor: pointer; }
 .warnbox ul { margin: 6px 0 0; padding-left: 18px; }
 .warnbox li { margin: 2px 0; }
+.notebox { margin-top: 10px; font-size: 12px; color: var(--dim); }
+.notebox ul { margin: 0; padding-left: 18px; }
+.notebox li { margin: 2px 0; }
 .errbox { margin-top: 10px; color: var(--danger); font-size: 12px; white-space: pre-wrap; }
 .okbox { margin-top: 12px; border: 1px solid var(--assistant); border-radius: 10px; padding: 12px; }
 .okbox .oktitle { color: var(--assistant); font-weight: 700; margin-bottom: 8px; }
@@ -1069,6 +1072,9 @@ input:focus, select:focus { border-color: var(--line-strong); box-shadow: 0 0 0 
 .warnbox summary { cursor: pointer; font-weight: 600; }
 .warnbox ul { margin: 6px 0 0; padding-left: 18px; }
 .warnbox li { margin: 2px 0; }
+.notebox { font-size: 11.5px; color: var(--text-2); margin-top: 12px; }
+.notebox ul { margin: 0; padding-left: 18px; }
+.notebox li { margin: 2px 0; }
 .errbox { font-size: 11.5px; color: var(--danger); margin-top: 10px; white-space: pre-wrap; }
 .okbox { margin-top: 12px; border: 1px solid #cfe3d8; background: #fbfdfb; border-radius: 14px; padding: 14px 16px; }
 .okbox .oktitle { color: #3f8463; font-weight: 700; margin-bottom: 10px; }
@@ -1620,6 +1626,13 @@ async function exportExecute() {
   }
 }
 
+function notesHtml(m) {
+  const notes = (m.notes || []).filter(Boolean);
+  return notes.length
+    ? '<div class="notebox"><ul>' + notes.map((n) => "<li>" + esc(n) + "</li>").join("") + "</ul></div>"
+    : "";
+}
+
 function planHtml(m) {
   const t = m.target || {};
   const s = m.source || {};
@@ -1640,6 +1653,7 @@ function planHtml(m) {
       </dl>
       ${warn.length ? '<details class="warnbox" open><summary>' + warn.length + " 条警告</summary><ul>"
         + warn.map((w) => "<li>" + esc(w) + "</li>").join("") + "</ul></details>" : ""}
+      ${notesHtml(m)}
     </div>`;
 }
 
@@ -1659,6 +1673,7 @@ function resultHtml(m) {
       <dl class="kv">${rows.map(([k, v]) => "<dt>" + esc(k) + "</dt><dd>" + esc(v) + "</dd>").join("")}</dl>
       ${warn.length ? '<details class="warnbox" open><summary>' + warn.length + " 条警告</summary><ul>"
         + warn.map((w) => "<li>" + esc(w) + "</li>").join("") + "</ul></details>" : ""}
+      ${notesHtml(m)}
     </div>`;
 }
 

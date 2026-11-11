@@ -9,7 +9,7 @@
 | Claude Code | `~/.claude/projects/<编码cwd>/*.jsonl` | ✅ | ✅ | uuid/parentUuid 链 |
 | Codex CLI | `~/.codex/sessions/**/rollout-*.jsonl(.zst)` | ✅ | ✅ | 写 plain jsonl + 更新 session_index |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | ✅ | ✅ | session/message/part 三层 JSON；写前自动备份 |
-| Qoder / Qoder CN | `~/.qoder(-cn)/projects/…` | ✅ | ✅ | Claude 派生格式，含 workspace-directories 元行 |
+| Qoder / Qoder CN | `~/.qoder(-cn)/projects/…` | ✅ | ✅ | Claude 派生格式，含 workspace-directories 元行；桌面端可见性见「已知限制」 |
 | Pi | `~/.pi/agent/sessions/…` | ✅ | ✅ | v3 树结构（id/parentId） |
 | DeepSeek dsh | `~/.dsh/sessions/…/session.v4.jsonl.zstd` | ✅ | ⚠️ 实验性 | zstd 帧压缩；写需 `--allow-dsh-write` |
 | WorkBuddy | `~/.workbuddy/projects/….jsonl` + `workbuddy.db` | ✅ | ✅ | jsonl + sessions 表双写 |
@@ -224,6 +224,7 @@ PYTHONPATH=src:tests python3 -m unittest discover -s tests
 
 ## 已知限制
 
+- Qoder / Qoder CN 桌面端的会话列表读客户端自己的 SQLite（`chat_sessions` / `chat_session_messages`），不读 `~/.qoder(-cn)/projects/*.jsonl`。本工具写入的会话对 CLI / daemon（`listSessions`、`getSessionMessages`、resume）可见，但不会出现在桌面侧边栏；要在桌面端看到，请用客户端自带的「设置 → 数据导入」。导入结果的 manifest `notes` 与 GUI 会重复提示这条边界。
 - dsh 写入为实验性（dsh 对事件 fail-closed 校验，格式漂移时会拒载而非损坏）
 - 实时双向同步、auth/MCP/hooks 配置迁移、字节级克隆：明确不做
 - Codex `.zst` 写出暂不支持（写 plain jsonl，官方兼容读取）

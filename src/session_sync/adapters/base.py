@@ -74,6 +74,10 @@ class Adapter(ABC):
         """Target-harness necessary-condition checks surfaced at import time."""
         return []
 
+    def import_notes(self, events: list[dict]) -> list[str]:
+        """Non-error facts about what the target harness will actually show."""
+        return []
+
     @abstractmethod
     def write_session(
         self,

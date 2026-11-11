@@ -559,5 +559,61 @@ class QoderImportMetadataTest(unittest.TestCase):
         self.assertFalse(any("人类提问" in w for w in manifest["warnings"]))
 
 
+class QoderDesktopVisibilityNoteTest(unittest.TestCase):
+    """Qoder desktop lists sessions from its own client database, not from the
+    jsonl files we write. Imports must say so instead of implying the session
+    will show up in the desktop sidebar."""
+
+    def setUp(self):
+        self._tmpobj = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpobj.name)
+        self.src_root = self.tmp / "src"
+        self.dst_root = self.tmp / "dst"
+        self.src_root.mkdir(parents=True)
+        self.dst_root.mkdir(parents=True)
+        (self.dst_root / "cc").mkdir()
+        self.addCleanup(self._tmpobj.cleanup)
+        fixtures.build_codex(self.src_root)
+        self.events = get_adapter("codex", root=self.src_root).read_session("cod-s1")
+
+    def test_qoder_targets_note_desktop_boundary(self):
+        for name in ("qoder", "qoder-cn"):
+            with self.subTest(target=name):
+                notes = get_adapter(name, root=self.dst_root).import_notes(self.events)
+                self.assertTrue(notes, f"{name} import must carry a visibility note")
+                joined = " ".join(notes)
+                self.assertIn("桌面", joined)
+                self.assertIn("数据导入", joined)
+
+    def test_other_targets_have_no_notes(self):
+        self.assertEqual(
+            get_adapter("claude-code", root=self.dst_root).import_notes(self.events), []
+        )
+
+    def test_copy_session_manifest_carries_notes(self):
+        from session_sync.migrate import copy_session
+
+        manifest = copy_session(
+            "codex", "cod-s1", "qoder-cn",
+            src_root=str(self.src_root), dst_root=str(self.dst_root), dry_run=False,
+        )
+        self.assertTrue(manifest["notes"])
+        self.assertIn("数据导入", " ".join(manifest["notes"]))
+        plain = copy_session(
+            "codex", "cod-s1", "claude-code",
+            src_root=str(self.src_root), dst_root=str(self.dst_root / "cc"), dry_run=False,
+        )
+        self.assertEqual(plain["notes"], [])
+
+    def test_print_manifest_shows_notes(self):
+        from session_sync.migrate import copy_session, print_manifest
+
+        manifest = copy_session(
+            "codex", "cod-s1", "qoder-cn",
+            src_root=str(self.src_root), dst_root=str(self.dst_root), dry_run=False,
+        )
+        self.assertIn("数据导入", print_manifest(manifest))
+
+
 if __name__ == "__main__":
     unittest.main()
