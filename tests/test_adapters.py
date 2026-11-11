@@ -423,5 +423,141 @@ class WorkBuddyTitleTest(unittest.TestCase):
         self.assertEqual(adapter.read_session(sid)[0]["title"], "please fix the login bug")
 
 
+class QoderImportMetadataTest(unittest.TestCase):
+    """Codex -> Qoder CN must emit the metadata the Qoder daemon needs to show
+    a session: human origin/humanInput on real prompts, a last-prompt title, an
+    active-leaf chain tail, and no foreign codex native lines."""
+
+    def setUp(self):
+        self._tmpobj = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpobj.name)
+        self.src_root = self.tmp / "src"
+        self.dst_root = self.tmp / "dst"
+        self.src_root.mkdir(parents=True)
+        self.dst_root.mkdir(parents=True)
+        self.addCleanup(self._tmpobj.cleanup)
+
+    def _export(self, sid, dst_name="qoder-cn"):
+        events = get_adapter("codex", root=self.src_root).read_session(sid)
+        dst = get_adapter(dst_name, root=self.dst_root)
+        result = dst.write_session(events, on_conflict="skip", dry_run=False)
+        lines = [
+            json.loads(l)
+            for l in Path(result["path"]).read_text(encoding="utf-8").splitlines()
+            if l.strip()
+        ]
+        return events, result, lines
+
+    def _write_codex(self, sid, user_texts):
+        day = self.src_root / "sessions" / "2026" / "11" / "08"
+        day.mkdir(parents=True)
+        lines = [
+            {"timestamp": "2026-11-08T10:00:00Z", "type": "session_meta",
+             "payload": {"session_id": sid, "cwd": fixtures.CWD}}
+        ]
+        for text in user_texts:
+            lines.append({
+                "timestamp": "2026-11-08T10:00:01Z", "type": "response_item",
+                "payload": {"type": "message", "role": "user",
+                            "content": [{"type": "input_text", "text": text}]},
+            })
+        fixtures.write_jsonl(day / f"rollout-2026-11-08T10-00-00-{sid}.jsonl", lines)
+
+    def test_real_prompt_gets_human_origin_and_humaninput(self):
+        fixtures.build_codex(self.src_root)
+        _, _, lines = self._export("cod-s1")
+        human = [l for l in lines if l.get("type") == "user"
+                 and (l.get("origin") or {}).get("kind") == "human"]
+        self.assertTrue(human, "no user line marked as human origin")
+        self.assertEqual(human[0]["humanInput"]["mode"], "prompt")
+        self.assertIn("please fix the login bug", human[0]["humanInput"]["text"])
+        self.assertEqual(human[0]["userType"], "external")
+
+    def test_emits_last_prompt_title_and_active_leaf(self):
+        fixtures.build_codex(self.src_root)
+        _, _, lines = self._export("cod-s1")
+        lp = [l for l in lines if l.get("type") == "last-prompt"]
+        self.assertTrue(lp, "no last-prompt title line")
+        self.assertIn("please fix the login bug", lp[-1]["lastPrompt"])
+        leaf = [l for l in lines if l.get("type") == "active-leaf"]
+        self.assertTrue(leaf, "no active-leaf chain tail")
+        uuids = {l.get("uuid") for l in lines if l.get("type") in ("user", "assistant")}
+        self.assertIn(leaf[-1]["leafUuid"], uuids)
+
+    def test_drops_foreign_codex_native_lines(self):
+        fixtures.build_codex_with_native(self.src_root)
+        _, _, lines = self._export("cod-s2")
+        types = {l.get("type") for l in lines}
+        for bad in ("world_state", "token_usage_record", "ghost_snapshot"):
+            self.assertNotIn(bad, types)
+        # the real conversation survives
+        self.assertTrue([l for l in lines if l.get("type") == "user"])
+        self.assertTrue([l for l in lines if l.get("type") == "assistant"])
+
+    def test_injected_text_is_not_human_or_title(self):
+        self._write_codex("cod-inj", [
+            "# AGENTS.md instructions for /tmp/proj-a\n\n<INSTRUCTIONS>rules</INSTRUCTIONS>",
+            "<environment_context>\n<cwd>/tmp/proj-a</cwd>\n</environment_context>",
+            "# Files mentioned by the user:\n\n## request.md:\nbody\n\n## My request:\n修复登录 bug",
+        ])
+        _, _, lines = self._export("cod-inj")
+        human = [l for l in lines if l.get("type") == "user"
+                 and (l.get("origin") or {}).get("kind") == "human"]
+        self.assertTrue(human)
+        self.assertIn("修复登录 bug", human[0]["humanInput"]["text"])
+        for h in human:
+            self.assertFalse(h["humanInput"]["text"].startswith("# AGENTS.md"))
+        lp = [l for l in lines if l.get("type") == "last-prompt"]
+        self.assertIn("修复登录 bug", lp[-1]["lastPrompt"])
+
+    def test_message_uuids_unique_and_chain_intact(self):
+        # codex function_call + function_call_output share a call_id; the writer
+        # must still give every message a distinct uuid and a non-self parent.
+        fixtures.build_codex(self.src_root)
+        _, _, lines = self._export("cod-s1")
+        msgs = [l for l in lines if l.get("type") in ("user", "assistant")]
+        uuids = [m["uuid"] for m in msgs]
+        self.assertEqual(len(uuids), len(set(uuids)), "duplicate message uuids")
+        for m in msgs:
+            self.assertNotEqual(m.get("parentUuid"), m["uuid"], "self-referential parentUuid")
+        leaf = [l for l in lines if l.get("type") == "active-leaf"][-1]
+        self.assertEqual(leaf["leafUuid"], uuids[-1])
+
+    def test_claude_code_target_gets_no_qoder_markers(self):
+        fixtures.build_codex(self.src_root)
+        _, _, lines = self._export("cod-s1", dst_name="claude-code")
+        for l in lines:
+            self.assertNotIn("origin", l)
+            self.assertNotIn("humanInput", l)
+        self.assertFalse([l for l in lines if l.get("type") == "active-leaf"])
+        self.assertFalse([l for l in lines if l.get("type") == "last-prompt"])
+
+    def test_copy_session_warns_when_no_human_prompt(self):
+        from session_sync.migrate import copy_session
+
+        self._write_codex("cod-empty", [
+            "# AGENTS.md instructions for /tmp/proj-a\n\n<INSTRUCTIONS>rules</INSTRUCTIONS>",
+            "<environment_context>\n<cwd>/tmp/proj-a</cwd>\n</environment_context>",
+        ])
+        manifest = copy_session(
+            "codex", "cod-empty", "qoder-cn",
+            src_root=str(self.src_root), dst_root=str(self.dst_root), dry_run=False,
+        )
+        self.assertTrue(
+            any("人类提问" in w for w in manifest["warnings"]),
+            f"expected no-human-prompt warning, got {manifest['warnings']}",
+        )
+
+    def test_copy_session_no_warning_for_real_prompt(self):
+        from session_sync.migrate import copy_session
+
+        fixtures.build_codex(self.src_root)
+        manifest = copy_session(
+            "codex", "cod-s1", "qoder-cn",
+            src_root=str(self.src_root), dst_root=str(self.dst_root), dry_run=False,
+        )
+        self.assertFalse(any("人类提问" in w for w in manifest["warnings"]))
+
+
 if __name__ == "__main__":
     unittest.main()

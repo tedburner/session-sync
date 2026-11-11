@@ -44,6 +44,7 @@ def copy_session(
 
     events = src_adapter.read_session(sid)
     ir_warnings = ir.validate(events)
+    target_warnings = dst_adapter.import_warnings(events)
     meta = ir.meta(events)
     target_cwd = resolve_target_cwd(meta, cwd, cwd_map)
     result = dst_adapter.write_session(events, cwd=target_cwd, on_conflict=on_conflict, dry_run=dry_run)
@@ -71,7 +72,7 @@ def copy_session(
             "skipped": result.get("skipped"),
         },
         "stats": stats,
-        "warnings": ir_warnings + result.get("warnings", []),
+        "warnings": ir_warnings + target_warnings + result.get("warnings", []),
     }
     if meta.get("ext", {}).get("skipped_event_msg"):
         manifest["warnings"].append(

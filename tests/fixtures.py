@@ -98,6 +98,26 @@ def build_codex(root, sid="cod-s1"):
     return day / f"rollout-2026-11-08T10-00-00-{sid}.jsonl"
 
 
+def build_codex_with_native(root, sid="cod-s2"):
+    """Codex rollout carrying native lines that are NOT portable to Qoder."""
+    day = root / "sessions" / "2026" / "11" / "08"
+    day.mkdir(parents=True)
+    lines = [
+        {"timestamp": ms_to_iso(1700000000000), "type": "session_meta", "payload": {
+            "session_id": sid, "id": sid, "cwd": CWD, "originator": "Codex CLI", "cli_version": "0.9"}},
+        {"timestamp": ms_to_iso(1700000000000), "type": "world_state", "payload": {"state": "x"}},
+        {"timestamp": ms_to_iso(1700000000500), "type": "response_item", "payload": {
+            "type": "message", "role": "user", "content": [{"type": "input_text", "text": "please fix the login bug"}]}},
+        {"timestamp": ms_to_iso(1700000001000), "type": "response_item", "payload": {
+            "type": "ghost_snapshot", "data": "y"}},
+        {"timestamp": ms_to_iso(1700000002000), "type": "token_usage_record", "payload": {"tokens": 1}},
+        {"timestamp": ms_to_iso(1700000003000), "type": "response_item", "payload": {
+            "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Found the bug."}]}},
+    ]
+    write_jsonl(day / f"rollout-2026-11-08T10-00-00-{sid}.jsonl", lines)
+    return day / f"rollout-2026-11-08T10-00-00-{sid}.jsonl"
+
+
 # ---------------------------------------------------------------- zcode
 
 

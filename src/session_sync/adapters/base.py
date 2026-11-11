@@ -70,6 +70,10 @@ class Adapter(ABC):
     def session_exists(self, sid: str) -> bool:
         return any(s.id == sid for s in self.list_sessions())
 
+    def import_warnings(self, events: list[dict]) -> list[str]:
+        """Target-harness necessary-condition checks surfaced at import time."""
+        return []
+
     @abstractmethod
     def write_session(
         self,

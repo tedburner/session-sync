@@ -275,15 +275,20 @@ class ClaudeLikeAdapter(Adapter):
 
     def _build_lines(self, events: list[dict], sid: str, cwd: str, warnings: list[str]) -> list[dict]:
         msgs = ir.messages(events)
+        uuids: list[str] = []
         id_map: dict[str, str] = {}
         for i, m in enumerate(msgs):
-            id_map[m.get("id")] = m.get("ext", {}).get("uuid") or f"{sid}-w{i + 1}"
+            u = m.get("ext", {}).get("uuid") or f"{sid}-w{i + 1}"
+            uuids.append(u)
+            mid = m.get("id")
+            if mid is not None and mid not in id_map:
+                id_map[mid] = u
 
         lines: list[dict] = []
         lines.extend(self._meta_lines(events, cwd, sid))
 
         # summary lines first (picker titles), referencing the last message uuid
-        last_uuid = id_map.get(msgs[-1].get("id")) if msgs else None
+        last_uuid = uuids[-1] if msgs else None
         for e in events:
             if e.get("type") == "event" and e.get("kind") == "summary":
                 text = (e.get("data") or {}).get("summary")
@@ -291,8 +296,8 @@ class ClaudeLikeAdapter(Adapter):
                     lines.append({"type": "summary", "summary": text, "leafUuid": last_uuid})
 
         prev_uuid = None
-        for m in msgs:
-            uuid = id_map.get(m.get("id"))
+        for i, m in enumerate(msgs):
+            uuid = uuids[i]
             parent_uuid = id_map.get(m.get("parent_id")) or prev_uuid
             ts = ms_to_iso(m.get("timestamp"))
             ext = m.get("ext") or {}
@@ -315,6 +320,7 @@ class ClaudeLikeAdapter(Adapter):
             elif m["role"] == "system":
                 role = "user"
                 common["isMeta"] = True
+            self._enrich_line(common, m)
             lines.append(
                 {
                     "type": role,
@@ -324,14 +330,28 @@ class ClaudeLikeAdapter(Adapter):
             )
             prev_uuid = uuid
 
+        lines.extend(self._native_lines(events, warnings))
+        lines.extend(self._trailing_meta_lines(events, sid, last_uuid))
+        return lines
+
+    def _enrich_line(self, common: dict, m: dict) -> None:
+        """Hook: add harness-specific fields to a user/assistant line (Qoder overrides)."""
+
+    def _native_lines(self, events: list[dict], warnings: list[str]) -> list[dict]:
+        """Hook: native passthrough lines. Base preserves every native:* payload."""
+        out: list[dict] = []
         for e in events:
             if e.get("type") == "event" and e.get("kind", "").startswith("native:"):
                 raw = (e.get("ext") or {}).get("raw_line")
                 if raw is not None:
-                    lines.append(raw)
+                    out.append(raw)
                 else:
                     warnings.append(f"dropped native line {e.get('kind')} (no raw payload)")
-        return lines
+        return out
+
+    def _trailing_meta_lines(self, events: list[dict], sid: str, last_uuid: str | None) -> list[dict]:
+        """Hook: harness-specific trailing meta lines (Qoder overrides)."""
+        return []
 
     @staticmethod
     def _content_from_blocks(m: dict, warnings: list[str]):
